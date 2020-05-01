@@ -1,153 +1,160 @@
-#include <sys/time.h>
-#include <fuse.h>
-#include <dirent.h>
-#include <stdio.h>
-#include <fcntl.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
-
 #define FUSE_USE_VERSION 28
-#define HAVE_SETXATTR
-#ifdef HAVE_SETXATTR
-#include <sys/xattr.h>
-#endif
+#include <fuse.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <dirent.h>
+#include <errno.h>
+#include <sys/time.h>
+#include <time.h>
 
-#ifdef linux
-#define _XOPEN_SOURCE 500
-#endif
+static const char *dirpath = "/home/akmu/modul4/fuse";
+static const char *key = "9(ku@AW1[Lmvgax6q`5Y2Ry?+sF!^HKQiBXCUSe&0M.b%rI'7d)o4~VfZ*{#:}ETt$3J-zpc]lnh8,GwP_ND|jO";
+static const char *logpath = "/home/akmu/modul4/fuse/fs_log.txt";
 
-#ifdef HAVE_CONFIG_H
-#include <config.h>
-#endif
+void changePath(char *fpath, const char *path, int isWriteOper, int isFileAsked) {
+  char *ptr = strstr(path, "/encv1_");
+  int state = 0;
+  if (ptr != NULL) {
+    if (strstr(ptr+1, "/") != NULL) state = 1;
+  }
+  char fixPath[1000];
+  memset(fixPath, 0, sizeof(fixPath));
+  if (ptr != NULL && state) {
+    ptr = strstr(ptr+1, "/");
+    char pathEncvDirBuff[1000];
+    char pathEncryptedBuff[1000];
+    strcpy(pathEncryptedBuff, ptr);
+    strncpy(pathEncvDirBuff, path, ptr-path);
+    if (isWriteOper) {
+      char pathFileBuff[1000];
+      char pathDirBuff[1000];
+      getDirAndFile(pathDirBuff, pathFileBuff, pathEncryptedBuff);
+      decrypt(pathDirBuff, 0);
+      sprintf(fixPath, "%s%s/%s", pathEncvDirBuff, pathDirBuff, pathFileBuff);
+    } else if (isFileAsked) {
+      char pathFileBuff[1000];
+      char pathDirBuff[1000];
+      char pathExtBuff[1000];
+      getDirAndFile(pathDirBuff, pathFileBuff, pathEncryptedBuff);
+      char *whereIsExtension = strrchr(pathFileBuff, '.');
+      if (whereIsExtension-pathFileBuff <= 1) {
+        decrypt(pathDirBuff, 0);
+        decrypt(pathFileBuff, 0);
+        sprintf(fixPath, "%s%s/%s", pathEncvDirBuff, pathDirBuff, pathFileBuff);
+      } else {
+        char pathJustFileBuff[1000];
+        memset(pathJustFileBuff, 0, sizeof(pathJustFileBuff));
+        strcpy(pathExtBuff, whereIsExtension);
+        snprintf(pathJustFileBuff, whereIsExtension-pathFileBuff+1, "%s", pathFileBuff);
+        decrypt(pathDirBuff, 0);
+        decrypt(pathJustFileBuff, 0);
+        sprintf(fixPath, "%s%s/%s%s", pathEncvDirBuff, pathDirBuff, pathJustFileBuff, pathExtBuff);
+      }
+    } else {
+      decrypt(pathEncryptedBuff, 0);
+      sprintf(fixPath, "%s%s", pathEncvDirBuff, pathEncryptedBuff);
+    }
+  } else {
+    strcpy(fixPath, path);
+  }
+  if (strcmp(path, "/") == 0) {
+    sprintf(fpath, "%s", dirpath);
+  } else {
+    sprintf(fpath, "%s%s", dirpath, fixPath);
+  }
+}
+
+void logFile(char *level, char *cmd, int res, int lenDesc, const char *desc[]) {
+  FILE *f = fopen(logpath, "a");
+  time_t t;
+  struct tm *tmp;
+  char timeBuff[100];
+
+  time(&t);
+  tmp = localtime(&t);
+  strftime(timeBuff, sizeof(timeBuff), "%y%m%d-%H:%M:%S", tmp);
+
+  fprintf(f, "%s::%s::%s::%d", level, timeBuff, cmd, res);
+  for (int i = 0; i < lenDesc; i++) {
+    fprintf(f, "::%s", desc[i]);
+  }
+  fprintf(f, "\n");
+
+  fclose(f);
+}
 
 
-
-char c_key[90] = "9(ku@AW1[Lmvgax6q`5Y2Ry?+sF!^HKQiBXCUSe&0M.b%rI'7d)o4~VfZ{#:}ETt$3J-zpc]lnh8,GwP_ND|jO";
-static const char *dirpath = "/home/xd/Documents";
-
-void c_encrypt(char* str);
-void c_decrypt(char* str);
-
-static int xmp_getattr(const char *path, struct stat *stbuf)
+static int _getattr(const char *path, struct stat *stbuf)
 {
-	int res;
 
 	char fpath[1000];
-	sprintf(fpath, "%s%s", dirpath, path);
-	printf("attr [%s] [%s]\n", dirpath, path);
+  changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, sizeof(fpath));
+    changePath(fpath, path, 0, 0);
+  }
 
-	int mode_encr=0;
-	char xpath[1000];
+	int res;
 
-	sprintf(xpath, "%s", fpath);
-	printf("attr %s\n", xpath);
+	res = lstat(fpath, stbuf);
 
-	char modpath[1000];
-	sprintf(modpath, "%s", "/");
-	/strcpy(modpath, "/");
+  const char *desc[] = {path};
+  logFile("INFO", "GETATTR", res, 1, desc);
 
-	int i, s, sc;
-	s=0;sc=0;
-	for (i=0;i<strlen(xpath);i++)
-		if(xpath[i]=='/') s++;
+	if (res == -1) return -errno;
 
-	char *tok, *last;
-	last = tok = strtok(xpath, "/");
-
-	while(tok != NULL){
-		if(s==1){
-			strcat(modpath, tok);
-			strcat(modpath, "/");
-			break;
-		}
-		if(strstr(tok, "encv1_")){
-			printf("mode enc -> enc 1\n");
-			mode_encr = 1;
-		}
-		sc++;
-		last = tok;
-		if(sc<s){
-			strcat(modpath, tok);
-			strcat(modpath, "/");
-		}
-		tok = strtok(NULL, "/");
-	}
-	if (mode_encr == 1)
-		c_decrypt(last);
-	strcat(modpath, last);
-	strcpy(xpath, modpath);
-	sprintf(xpath, "%s", modpath);=
-
-	if(strstr(xpath, "encv1_"))
-	mode_encr = 1;
-	else if (strstr(xpath, "encv2_"))
-	mode_encr = 2;
-
-	switch (mode_encr){
-	 	case 1:
-	 		s=0;sc=0;
-	 		for (i=0;i<strlen(xpath);i++)
-	 			if(xpath[i]=='/') s++;
-	 		strcpy(modpath, "/");
-	 		char *tok;
-	 		last = tok = strtok(xpath, "/");
-	 		while(tok != NULL){
-	 			sc++;
-	 			last = tok;
-	 			if(sc!=s){
-	 				strcat(modpath, tok);
-	 				strcat(modpath, "/");
-	 			}
-	 			tok = strtok(NULL, "/");
-	 		}
-	 		c_decrypt(last);
-	 		strcat(modpath, last);
-	 		strcpy(xpath, modpath);
-	 }
-
-	res = lstat(xpath, stbuf);
-	if (res == -1)
-		return -errno;
 
 	return 0;
 }
 
-static int xmp_access(const char *path, int mask)
+static int _access(const char *path, int mask)
 {
+	char fpath[1000];
+	changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, 1000);
+    changePath(fpath, path, 0, 0);
+  }
+
 	int res;
 
-	res = access(path, mask);
-	if (res == -1)
-		return -errno;
+	res = access(fpath, mask);
+
+  const char *desc[] = {path};
+  logFile("INFO", "ACCESS", res, 1, desc);
+
+	if (res == -1) return -errno;
+
+
 	return 0;
 }
 
-
-static int xmp_readlink(const char *path, char *buf, size_t size)
+static int _readlink(const char *path, char *buf, size_t size)
 {
+	char fpath[1000];
+	changePath(fpath, path, 0, 1);
+
 	int res;
-	res = readlink(path, buf, size - 1);
-	if (res == -1)
-		return -errno;
+
+	res = readlink(fpath, buf, size - 1);
+
+  const char *desc[] = {path};
+  logFile("INFO", "READLINK", res, 1, desc);
+
+	if (res == -1) return -errno;
 
 	buf[res] = '\0';
 	return 0;
 }
 
 
-static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+static int _readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 		       off_t offset, struct fuse_file_info *fi)
 {
 	char fpath[1000];
-    if(strcmp(fpath,"/") == 0)
-    {
-        path=dirpath;
-        sprintf(fpath,"%s",path);
-    }
-    else {
-        sprintf(fpath, "%s/%s", dirpath, path);
-    }
+	changePath(fpath, path, 0, 0);
 
 	DIR *dp;
 	struct dirent *de;
@@ -155,280 +162,530 @@ static int xmp_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 	(void) offset;
 	(void) fi;
 
-	int mode_encr=0;
-	char xpath[1000];
-
-	sprintf(xpath, "%s", path);
-
-	if(strstr(xpath, "encv1_")){
-		printf("mode enc jadi 1\n");
-		mode_encr = 1;
-	}
-	else if (strstr(xpath, "encv2_"))
-		mode_encr = 2;
-
-	printf("readdir [%s]\n", fpath);
 	dp = opendir(fpath);
-	if (dp == NULL)
-		return -errno;
+	if (dp == NULL) {
+    const char *desc[] = {path};
+    logFile("INFO", "READDIR", -1, 1, desc);
+    return -errno;
+  }
 
-	char enc[1000];
 	while ((de = readdir(dp)) != NULL) {
 		struct stat st;
 		memset(&st, 0, sizeof(st));
 		st.st_ino = de->d_ino;
 		st.st_mode = de->d_type << 12;
+    if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+    if (strstr(path, "/encv1_") != NULL) {
+      char encryptThis[1000];
+      strcpy(encryptThis, de->d_name);
+      if (de->d_type == DT_REG) {
+        char *whereIsExtension = strrchr(encryptThis, '.');
+        if (whereIsExtension-encryptThis <= 1) {
+          decrypt(encryptThis, 1);
+        } else {
+          char pathFileBuff[1000];
+          char pathExtBuff[1000];
+          strcpy(pathExtBuff, whereIsExtension);
+          snprintf(pathFileBuff, whereIsExtension-encryptThis+1, "%s", encryptThis);
+          decrypt(pathFileBuff, 1);
+          memset(encryptThis, 0, sizeof(encryptThis));
+          sprintf(encryptThis, "%s%s", pathFileBuff, pathExtBuff);
+        }
+      } else if (de->d_type == DT_DIR) {
+        decrypt(encryptThis, 1);
+      }
 
-		sprintf(enc, "%s", de->d_name);
-		if(mode_encr == 1){
-			c_encrypt(enc);
-		}
-
-		printf("readdir %s | %s\n", xpath, enc);
-		if (filler(buf, enc, &st, 0))
-			break;
+  		if (filler(buf, encryptThis, &st, 0)) break;
+    } else {
+      if (filler(buf, de->d_name, &st, 0)) break;
+    }
 	}
+
+  const char *desc[] = {path};
+  logFile("INFO", "READDIR", 0, 1, desc);
 
 	closedir(dp);
 	return 0;
 }
 
-static int xmp_mknod(const char *path, mode_t mode, dev_t rdev)
+static int _mkdir(const char *path, mode_t mode)
 {
+	char fpath[1000];
+	changePath(fpath, path, 1, 0);
+
+  char *ptr = strrchr(path, '/');
+  char *filePtr = strstr(ptr, "/encv1_");
+  if (filePtr != NULL) {
+    if (filePtr - ptr == 0) {
+      const char *desc[] = {path};
+      logFile("SPECIAL", "ENCV1", 0, 1, desc);
+    }
+  }
+
 	int res;
-	if (S_ISREG(mode)) {
-		res = open(path, O_CREAT | O_EXCL | O_WRONLY, mode);
-		if (res >= 0)
-			res = close(res);
-	} else if (S_ISFIFO(mode))
-		res = mkfifo(path, mode);
-	else
-		res = mknod(path, mode, rdev);
-	if (res == -1)
-		return -errno;
+
+	res = mkdir(fpath, mode);
+
+  char syncOrigPath[1000];
+  char syncDirPath[1000];
+  char syncFilePath[1000];
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, path);
+  getDirAndFile(syncDirPath, syncFilePath, syncOrigPath);
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, syncDirPath);
+  do {
+    char syncPath[1000];
+    memset(syncPath, 0, sizeof(syncPath));
+    nextSync(syncDirPath);
+    if (strcmp(syncDirPath, syncOrigPath) == 0) break;
+    changePath(syncPath, syncDirPath, 1, 0);
+    if (access(syncPath, F_OK) == -1) continue;
+    sprintf(syncPath, "%s/%s", syncPath, syncFilePath);
+    mkdir(syncPath, mode);
+  } while (1);
+
+
+  const char *desc[] = {path};
+  logFile("INFO", "MKDIR", res, 1, desc);
+
+	if (res == -1) return -errno;
+
 	return 0;
 }
 
-static int xmp_mkdir(const char *path, mode_t mode)
+static int _unlink(const char *path)
 {
+	char fpath[1000];
+	changePath(fpath, path, 0, 1);
+
 	int res;
-	res = mkdir(path, mode);
-	if (res == -1)
-		return -errno;
+
+	res = unlink(fpath);
+
+  char syncOrigPath[1000];
+  char syncDirPath[1000];
+  char syncFilePath[1000];
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, path);
+  getDirAndFile(syncDirPath, syncFilePath, syncOrigPath);
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, syncDirPath);
+  do {
+    char syncPath[1000];
+    memset(syncPath, 0, sizeof(syncPath));
+    nextSync(syncDirPath);
+    if (strcmp(syncDirPath, syncOrigPath) == 0) break;
+    changePath(syncPath, syncDirPath, 0, 1);
+    if (access(syncPath, F_OK) == -1) continue;
+    sprintf(syncPath, "%s/%s", syncPath, syncFilePath);
+    unlink(syncPath);
+  } while (1);
+
+  const char *desc[] = {path};
+  logFile("WARNING", "UNLINK", res, 1, desc);
+
+	if (res == -1) return -errno;
 
 	return 0;
 }
 
-
-static int xmp_rmdir(const char *path)
+static int _rmdir(const char *path)
 {
+	char fpath[1000];
+	changePath(fpath, path, 0, 0);
 	int res;
-	res = rmdir(path);
-	if (res == -1)
-		return -errno;
+
+	res = rmdir(fpath);
+
+  char syncOrigPath[1000];
+  char syncDirPath[1000];
+  char syncFilePath[1000];
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, path);
+  getDirAndFile(syncDirPath, syncFilePath, syncOrigPath);
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, syncDirPath);
+  do {
+    char syncPath[1000];
+    memset(syncPath, 0, sizeof(syncPath));
+    nextSync(syncDirPath);
+    if (strcmp(syncDirPath, syncOrigPath) == 0) break;
+    changePath(syncPath, syncDirPath, 0, 0);
+    if (access(syncPath, F_OK) == -1) continue;
+    sprintf(syncPath, "%s/%s", syncPath, syncFilePath);
+    rmdir(syncPath);
+  } while (1);
+
+  const char *desc[] = {path};
+  logFile("WARNING", "RMDIR", res, 1, desc);
+
+	if (res == -1) return -errno;
 
 	return 0;
 }
 
-
-static int xmp_rename(const char *from, const char *to)
+static int _symlink(const char *from, const char *to)
 {
+	char ffrom[1000];
+	char fto[1000];
+	changePath(ffrom, from, 0, 1);
+	changePath(fto, to, 0, 1);
+
 	int res;
-	res = rename(from, to);
-	if (res == -1)
-		return -errno;
+
+	res = symlink(ffrom, fto);
+
+  const char *desc[] = {from, to};
+  logFile("INFO", "SYMLINK", res, 2, desc);
+
+	if (res == -1) return -errno;
+
 	return 0;
 }
 
-
-
-static int xmp_open(const char *path, struct fuse_file_info *fi)
+static int _rename(const char *from, const char *to)
 {
-	printf("open\n");
+	char ffrom[1000];
+	char fto[1000];
+	changePath(ffrom, from, 0, 1);
+	changePath(fto, to, 0, 1);
+  if (access(ffrom, F_OK) == -1) {
+    memset(ffrom, 0, sizeof(ffrom));
+    changePath(ffrom, from, 0, 0);
+  }
+  if (access(fto, F_OK) == -1) {
+    memset(fto, 0, sizeof(fto));
+    changePath(fto, to, 0, 0);
+  }
+
+  char *toPtr = strrchr(to, '/');
+  char *fromPtr = strrchr(from ,'/');
+  char *toStartPtr = strstr(toPtr, "/encv2_");
+  char *fromStartPtr = strstr(fromPtr, "/encv2_");
+  if (toStartPtr != NULL) {
+    if (toStartPtr - toPtr == 0) {
+      splitter(ffrom);
+      const char *desc[] = {fto};
+      logFile("SPECIAL", "ENCV2", 0, 1, desc);
+    }
+  }
+  if (fromStartPtr != NULL) {
+    if (fromStartPtr - fromPtr == 0) {
+      unsplitter(ffrom);
+    }
+  }
+  toStartPtr = strstr(toPtr, "/encv1_");
+  if (toStartPtr != NULL) {
+    if (toStartPtr - toPtr == 0) {
+      const char *desc[] = {fto};
+      logFile("SPECIAL", "ENCV1", 0, 1, desc);
+    }
+  }
+
 	int res;
-	res = open(path, fi->flags);
-	if (res == -1)
-		return -errno;
-	close(res);
+
+	res = rename(ffrom, fto);
+
+  const char *desc[] = {from, to};
+  logFile("INFO", "RENAME", res, 2, desc);
+
+	if (res == -1) return -errno;
+
 	return 0;
 }
 
-static int xmp_read(const char *path, char *buf, size_t size, off_t offset,
+static int _link(const char *from, const char *to)
+{
+	char ffrom[1000];
+	char fto[1000];
+	changePath(ffrom, from, 0, 1);
+	changePath(fto, to, 0, 1);
+
+	int res;
+
+	res = link(ffrom, fto);
+
+  const char *desc[] = {from, to};
+  logFile("INFO", "LINK", res, 2, desc);
+
+	if (res == -1) return -errno;
+
+	return 0;
+}
+
+static int _chmod(const char *path, mode_t mode)
+{
+	char fpath[1000];
+	changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, sizeof(fpath));
+    changePath(fpath, path, 0, 0);
+  }
+
+	int res;
+
+	res = chmod(fpath, mode);
+
+  char modeBuff[100];
+  sprintf(modeBuff, "%d", mode);
+  const char *desc[] = {path, modeBuff};
+  logFile("INFO", "CHMOD", res, 2, desc);
+
+	if (res == -1) return -errno;
+
+	return 0;
+}
+
+static int _chown(const char *path, uid_t uid, gid_t gid)
+{
+	char fpath[1000];
+  changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, sizeof(fpath));
+    changePath(fpath, path, 0, 0);
+  }
+
+	int res;
+
+	res = lchown(fpath, uid, gid);
+
+  char uidBuff[100];
+  char gidBuff[100];
+  sprintf(uidBuff, "%d", uid);
+  sprintf(gidBuff, "%d", gid);
+  const char *desc[] = {path, uidBuff, gidBuff};
+  logFile("INFO", "CHOWN", res, 3, desc);
+
+	if (res == -1) return -errno;
+
+	return 0;
+}
+
+static int _truncate(const char *path, off_t size)
+{
+	char fpath[1000];
+  changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, sizeof(fpath));
+    changePath(fpath, path, 0, 0);
+  }
+
+	int res;
+
+	res = truncate(fpath, size);
+
+  const char *desc[] = {path};
+  logFile("INFO", "TRUNCATE", res, 1, desc);
+
+	if (res == -1) return -errno;
+
+	return 0;
+}
+
+static int _utimens(const char *path, const struct timespec ts[2])
+{
+	char fpath[1000];
+  changePath(fpath, path, 0, 1);
+  if (access(fpath, F_OK) == -1) {
+    memset(fpath, 0, sizeof(fpath));
+    changePath(fpath, path, 0, 0);
+  }
+
+	int res;
+
+	/* don't use utime/utimes since they follow symlinks */
+	res = utimensat(0, fpath, ts, AT_SYMLINK_NOFOLLOW);
+
+  const char *desc[] = {path};
+  logFile("INFO", "UTIMENSAT", res, 1, desc);
+
+	if (res == -1) return -errno;
+
+	return 0;
+}
+
+static int _create(const char *path, mode_t mode,
+		      struct fuse_file_info *fi)
+{
+	char fpath[1000];
+  changePath(fpath, path, 1, 0);
+
+	int res;
+
+	res = open(fpath, fi->flags, mode);
+
+  char syncOrigPath[1000];
+  char syncDirPath[1000];
+  char syncFilePath[1000];
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, path);
+  getDirAndFile(syncDirPath, syncFilePath, syncOrigPath);
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, syncDirPath);
+  do {
+    char syncPath[1000];
+    memset(syncPath, 0, sizeof(syncPath));
+    nextSync(syncDirPath);
+    if (strcmp(syncDirPath, syncOrigPath) == 0) break;
+    changePath(syncPath, syncDirPath, 0, 1);
+    if (access(syncPath, F_OK) == -1) continue;
+    sprintf(syncPath, "%s/%s", syncPath, syncFilePath);
+    close(open(syncPath, fi->flags, mode));
+  } while (1);
+
+  const char *desc[] = {path};
+  logFile("INFO", "CREAT", res, 1, desc);
+
+	if (res == -1) return -errno;
+
+	fi->fh = res;
+	return 0;
+}
+
+static int _open(const char *path, struct fuse_file_info *fi)
+{
+	char fpath[1000];
+  changePath(fpath, path, 0, 1);
+
+	int res;
+
+	res = open(fpath, fi->flags);
+
+  const char *desc[] = {path};
+  logFile("INFO", "OPEN", res, 1, desc);
+
+	if (res == -1) return -errno;
+
+	fi->fh = res;
+	return 0;
+}
+
+static int _read(const char *path, char *buf, size_t size, off_t offset,
 		    struct fuse_file_info *fi)
 {
 	char fpath[1000];
-	if (strcmp(path, "/") == 0) {
-		path = dirpath;
-		sprintf(fpath, "%s", path);
-	}else
-		sprintf(fpath, "%s%s", dirpath, path);
+	changePath(fpath, path, 0, 1);
 
 	int fd;
 	int res;
-	(void) fi;
-	fd = open(fpath, O_RDONLY);
-	if (fd == -1)
-		return -errno;
+
+	if(fi == NULL) fd = open(fpath, O_RDONLY);
+	else fd = fi->fh;
+
+	if (fd == -1) return -errno;
+
 	res = pread(fd, buf, size, offset);
-	if (res == -1)
-		res = -errno;
-	close(fd);
+
+  const char *desc[] = {path};
+  logFile("INFO", "READ", res, 1, desc);
+
+	if (res == -1) res = -errno;
+
+	if(fi == NULL) close(fd);
 	return res;
 }
 
-static int xmp_write(const char *path, const char *buf, size_t size,
+static int _write(const char *path, const char *buf, size_t size,
 		     off_t offset, struct fuse_file_info *fi)
 {
+	char fpath[1000];
+	changePath(fpath, path, 1, 0);
+
 	int fd;
 	int res;
 
 	(void) fi;
-	fd = open(path, O_WRONLY);
-	if (fd == -1)
-		return -errno;
+	if(fi == NULL) fd = open(fpath, O_WRONLY);
+	else fd = fi->fh;
+
+	if (fd == -1) return -errno;
 
 	res = pwrite(fd, buf, size, offset);
-	if (res == -1)
-		res = -errno;
 
-	close(fd);
+  char syncOrigPath[1000];
+  char syncDirPath[1000];
+  char syncFilePath[1000];
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, path);
+  getDirAndFile(syncDirPath, syncFilePath, syncOrigPath);
+  memset(syncOrigPath, 0, sizeof(syncOrigPath));
+  strcpy(syncOrigPath, syncDirPath);
+  do {
+    char syncPath[1000];
+    int syncFd;
+    memset(syncPath, 0, sizeof(syncPath));
+    nextSync(syncDirPath);
+    if (strcmp(syncDirPath, syncOrigPath) == 0) break;
+    changePath(syncPath, syncDirPath, 0, 1);
+    if (access(syncPath, F_OK) == -1) continue;
+    sprintf(syncPath, "%s/%s", syncPath, syncFilePath);
+    syncFd = open(syncPath, O_WRONLY);
+    if (syncFd == -1) return -errno;
+    pwrite(syncFd, buf, size, offset);
+    close(syncFd);
+  } while (1);
+
+  const char *desc[] = {path};
+  logFile("INFO", "WRITE", res, 1, desc);
+
+	if (res == -1) res = -errno;
+
+	if(fi == NULL) close(fd);
 	return res;
 }
 
-static int xmp_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
+static int _statfs(const char *path, struct statvfs *stbuf)
+{
+	char fpath[1000];
+	changePath(fpath, path, 0, 1);
+	int res;
 
-    (void) fi;
+	res = statvfs(fpath, stbuf);
 
-    int res;
-    res = creat(path, mode);
-    if(res == -1)
-	return -errno;
+  const char *desc[] = {path};
+  logFile("INFO", "STATFS", res, 1, desc);
 
-    close(res);
+	if (res == -1) return -errno;
 
-    return 0;
+	return 0;
 }
 
-
-
-
-static int xmp_fsync(const char *path, int isdatasync,
-		     struct fuse_file_info *fi)
+static int _release(const char *path, struct fuse_file_info *fi)
 {
 	(void) path;
-	(void) isdatasync;
-	(void) fi;
+	close(fi->fh);
+  const char *desc[] = {path};
+  logFile("INFO", "RELEASE", 0, 1, desc);
 	return 0;
 }
 
-#ifdef HAVE_SETXATTR
-static int xmp_setxattr(const char *path, const char *name, const char *value,
-			size_t size, int flags)
-{
-	int res = lsetxattr(path, name, value, size, flags);
-	if (res == -1)
-		return -errno;
-	return 0;
-}
 
-static int xmp_getxattr(const char *path, const char *name, char *value,
-			size_t size)
-{
-	int res = lgetxattr(path, name, value, size);
-	if (res == -1)
-		return -errno;
-	return res;
-}
-
-static int xmp_listxattr(const char *path, char *list, size_t size)
-{
-	int res = llistxattr(path, list, size);
-	if (res == -1)
-		return -errno;
-	return res;
-}
-
-static int xmp_removexattr(const char *path, const char *name)
-{
-	int res = lremovexattr(path, name);
-	if (res == -1)
-		return -errno;
-	return 0;
-}
-#endif
-
-static struct fuse_operations xmp_oper = {
-	.getattr	= xmp_getattr,
-	.access		= xmp_access,
-	.readlink	= xmp_readlink,
-	.readdir	= xmp_readdir,
-	.mknod		= xmp_mknod,
-	.mkdir		= xmp_mkdir,
-	.symlink	= xmp_symlink,
-	.unlink		= xmp_unlink,
-	.rmdir		= xmp_rmdir,
-	.rename		= xmp_rename,
-	.link		= xmp_link,
-	.chmod		= xmp_chmod,
-	.chown		= xmp_chown,
-	.truncate	= xmp_truncate,
-	.utimens	= xmp_utimens,
-	.open		= xmp_open,
-	.read		= xmp_read,
-	.write		= xmp_write,
-	.statfs		= xmp_statfs,
-	.create     = xmp_create,
-	.release	= xmp_release,
-	.fsync		= xmp_fsync,
-
-#ifdef HAVE_SETXATTR
-	.setxattr	    = xmp_setxattr,
-	.getxattr	    = xmp_getxattr,
-	.listxattr	    = xmp_listxattr,
-	.removexattr	= xmp_removexattr,
-#endif
+static const struct fuse_operations _oper = {
+	.getattr	= _getattr,
+	.access		= _access,
+	.readlink	= _readlink,
+	.readdir	= _readdir,
+	.mkdir		= _mkdir,
+	.symlink	= _symlink,
+	.unlink		= _unlink,
+	.rmdir		= _rmdir,
+	.rename		= _rename,
+	.link		  = _link,
+	.chmod		= _chmod,
+	.chown		= _chown,
+	.truncate	= _truncate,
+	.utimens	= _utimens,
+	.open		  = _open,
+	.create 	= _create,
+	.read		  = _read,
+	.write		= _write,
+	.statfs		= _statfs,
+	.release	= _release,
 };
 
 int main(int argc, char *argv[])
 {
 	umask(0);
-	return fuse_main(argc, argv, &xmp_oper, NULL);
-}
-
-void c_encrypt(char* str)
-{
-    if(!strcmp(str, ".") || !strcmp(str, "..")) return;
-
-    int i, j;
-    int len = strlen(str);
-
-    for(i = 0; i < len; i++){
-
-        for(j = 0; j < 87; j++){
-
-            if(str[i] == c_key[j]){
-                str[i] = c_key[(j + len) % 87];
-                break;
-            }
-        }
-    }
-}
-
-void c_decrypt(char* str)
-{
-    if(!strcmp(str, ".") || !strcmp(str, "..")) return;
-
-    int i, j;
-    int len = strlen(str);
-
-    for(i = 0 ; i < len; i++) {
-
-        for(j = 0; j < 87; j++){
-
-            if(str[i] == c_key[j]){
-                str[i] = c_key[(j + 87 - len) % 87];
-                break;
-            }
-        }
-    }
+	return fuse_main(argc, argv, &_oper, NULL);
 }
